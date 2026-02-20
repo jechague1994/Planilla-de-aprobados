@@ -1,98 +1,85 @@
 import streamlit as st
+from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import date
 
-# Configuración de la página
-st.set_page_config(page_title="Planilla de Aprobados", layout="wide")
+# Configuración de página
+st.set_page_config(page_title="Planilla Compartida", layout="wide")
 
-# Estilo personalizado para el título
-st.markdown("<h1 style='text-align: center; color: #1E40AF;'>Planilla de aprobados</h1>", unsafe_allow_html=True)
-st.markdown("---")
+st.markdown("<h1 style='text-align: center; color: #1E40AF;'>Planilla de Aprobados Real-Time</h1>", unsafe_allow_html=True)
 
-# --- PERSISTENCIA DE DATOS ---
-# Usamos session_state para mantener los datos mientras la app esté abierta
-if 'datos' not in st.session_state:
-    st.session_state.datos = pd.DataFrame(columns=[
-        "Cliente", "Vendedor", "N° Presupuesto", 
-        "Fecha Creación", "Fecha Aprobación", "Monto", "Corporativo"
-    ])
+# --- CONEXIÓN A GOOGLE SHEETS ---
+# Lee la URL desde el archivo secrets.toml que creaste
+try:
+    conn = st.connection("gsheets", type=GSheetsConnection)
+    df = conn.read(ttl=0) # ttl=0 para que los datos siempre sean los más recientes
+except Exception as e:
+    st.error("Error de conexión. Revisa que el link en secrets.toml sea correcto y la hoja sea pública.")
+    st.stop()
 
 # --- FORMULARIO DE CARGA ---
-with st.container():
-    st.subheader("📝 Cargar Nuevo Registro")
-    with st.form("form_registro", clear_on_submit=True):
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
+with st.expander("📝 Cargar Nuevo Registro", expanded=True):
+    with st.form("registro_form", clear_on_submit=True):
+        c1, c2, c3 = st.columns(3)
+        with c1:
             cliente = st.text_input("Nombre del Cliente")
             vendedor = st.text_input("Vendedor")
-        
-        with col2:
-            nro_ppto = st.text_input("N° de Presupuesto")
-            monto = st.number_input("Monto ($)", min_value=0.0, format="%.2f")
-            
-        with col3:
+        with c2:
+            nro = st.text_input("N° Presupuesto")
+            monto = st.number_input("Monto ($)", min_value=0.0)
+        with c3:
             f_crea = st.date_input("Fecha Creación", date.today())
             f_aprob = st.date_input("Fecha Aprobación", date.today())
-            es_corp = st.checkbox("¿Cliente Corporativo?")
+            corp = st.checkbox("¿Cliente Corporativo?")
+        
+        btn_guardar = st.form_submit_button("🚀 Guardar y Sincronizar")
 
-        submit = st.form_submit_button("✅ Guardar en Planilla")
-
-        if submit:
-            if cliente and nro_ppto:
-                nueva_fila = {
-                    "Cliente": cliente, 
-                    "Vendedor": vendedor, 
-                    "N° Presupuesto": nro_ppto,
-                    "Fecha Creación": str(f_crea), 
-                    "Fecha Aprobación": str(f_aprob), 
+        if btn_guardar:
+            if cliente and nro:
+                # Crear la nueva fila
+                nueva_fila = pd.DataFrame([{
+                    "Cliente": cliente,
+                    "Vendedor": vendedor,
+                    "Nro_Presupuesto": nro,
+                    "Fecha_Creacion": str(f_crea),
+                    "Fecha_Aprobacion": str(f_aprob),
                     "Monto": monto,
-                    "Corporativo": "SI" if es_corp else "NO"
-                }
-                # Añadir a la tabla
-                st.session_state.datos = pd.concat([st.session_state.datos, pd.DataFrame([nueva_fila])], ignore_index=True)
-                st.success("¡Registro cargado!")
+                    "Corporativo": "SI" if corp else "NO"
+                }])
+                
+                # Unir con los datos viejos y subir a la nube
+                df_actualizado = pd.concat([df, nueva_fila], ignore_index=True)
+                conn.update(data=df_actualizado)
+                
+                st.success("✅ ¡Guardado! Ahora todos pueden ver este registro.")
+                st.rerun()
             else:
-                st.error("Por favor, completa Cliente y N° de Presupuesto.")
+                st.error("Completa los campos obligatorios.")
 
 st.markdown("---")
 
-# --- SECCIÓN DE TABLA Y FILTROS ---
-if not st.session_state.datos.empty:
-    st.subheader("📊 Registros Actuales")
-    
-    # Buscador
-    busqueda = st.text_input("🔍 Buscar por cliente, vendedor o número de presupuesto...")
-    
-    # Filtrar datos
-    df_filtrado = st.session_state.datos.copy()
-    if busqueda:
-        # Busca en todas las columnas
-        mask = df_filtrado.astype(str).apply(lambda x: x.str.contains(busqueda, case=False)).any(axis=1)
-        df_filtrado = df_filtrado[mask]
+# --- BUSCADOR ---
+busqueda = st.text_input("🔍 Buscar en la base de datos compartida...")
 
-    # Mostrar Tabla
+if not df.empty:
+    # Filtro inteligente
+    mask = df.astype(str).apply(lambda x: x.str.contains(busqueda, case=False)).any(axis=1)
+    df_filtrado = df[mask]
+    
+    # Tabla visual
     st.dataframe(df_filtrado, use_container_width=True)
 
     # --- ACCIONES ---
-    col_descarga, col_borrar = st.columns([1, 1])
-    
-    with col_descarga:
-        # Descarga CSV
-        csv = df_filtrado.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="📥 Descargar esta vista (CSV)",
-            data=csv,
-            file_name="planilla_aprobados.csv",
-            mime="text/csv"
-        )
-    
-    with col_borrar:
-        # Borrado individual por selección
-        seleccion = st.selectbox("Seleccione N° de Presupuesto para borrar:", df_filtrado["N° Presupuesto"].unique())
-        if st.button("🗑️ Borrar Seleccionado"):
-            st.session_state.datos = st.session_state.datos[st.session_state.datos["N° Presupuesto"] != seleccion]
-            st.warning(f"Presupuesto {seleccion} eliminado.")
+    col_del, col_down = st.columns([1, 1])
+    with col_del:
+        if st.button("🗑️ Borrar ÚLTIMO registro"):
+            df_final = df.drop(df.index[-1])
+            conn.update(data=df_final)
+            st.warning("Último registro eliminado de la nube.")
             st.rerun()
+            
+    with col_down:
+        csv = df_filtrado.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Descargar CSV", csv, "planilla_nube.csv", "text/csv")
 else:
-    st.info("Aún no hay registros en la planilla.")
+    st.info("La base de datos está vacía. Empieza cargando un registro.")
