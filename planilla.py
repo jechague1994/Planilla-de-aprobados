@@ -10,7 +10,7 @@ st.title("Planilla de Aprobados")
 # Conexion a Google Sheets
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
-    df = conn.read(ttl=0)
+    df = conn.read(spreadsheet=st.secrets["public_gsheets_url"], ttl=0)
     df = df.dropna(how='all')
 except Exception as e:
     st.error("Error de conexion. Verifica el archivo secrets y que la hoja sea publica.")
@@ -51,4 +51,5 @@ with st.expander("Cargar Nuevo Registro", expanded=True):
 busqueda = st.text_input("Buscar...")
 if not df.empty:
     mask = df.astype(str).apply(lambda x: x.str.contains(busqueda, case=False)).any(axis=1)
+
     st.dataframe(df[mask], use_container_width=True)
